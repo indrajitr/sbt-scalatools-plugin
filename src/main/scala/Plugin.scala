@@ -91,14 +91,14 @@ object ScalaToolsPlugin extends Plugin {
 
   def scalaToolsSettings: Seq[Setting[_]] =
     inConfig(ScalaTools)(Seq(
-      publishTo    <<= version apply switchPublishRepo,
+      publishTo    <<= version(switchPublishRepo),
       mavenSettings := CredentialSources.Maven,
       credentials   := Seq(Credentials(CredentialSources.Default)),
       ivySbt       <<= (ivyConfiguration, credentials, mavenSettings, streams) map loadIvySbt)) ++
     Seq(
-      publishTo     <<= publishTo or (publishTo in ScalaTools).identity,
-      mavenSettings <<= mavenSettings or (mavenSettings in ScalaTools).identity,
-      credentials  <++= (credentials in ScalaTools).identity,
-      ivySbt        <<= (ivySbt in ScalaTools).identity)
+      publishTo     <<= publishTo or (publishTo in ScalaTools),
+      mavenSettings <<= mavenSettings or (mavenSettings in ScalaTools),
+      credentials  <++= credentials in ScalaTools,
+      ivySbt        <<= ivySbt in ScalaTools)
 
 }
