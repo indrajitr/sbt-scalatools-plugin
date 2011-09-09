@@ -33,17 +33,23 @@ object ScalaToolsPlugin extends Plugin {
 
   lazy val mavenSettings = SettingKey[File]("maven-settings", "Maven settings.xml file.")
 
-  object DistributionRepositories {
-    lazy val Local    = Resolver.file("Local Repository", Path.userHome / ".m2" / "repository" asFile)
-    lazy val Snapshot = nexusRepo("snapshots")
-    lazy val Release  = nexusRepo("releases")
+  lazy val nexusRealm        = SettingKey[String]("nexus-realm", "Nexus Repository realm.")
+  lazy val nexusHost         = SettingKey[Option[String]]("nexus-host", "Nexus Repository hostname.")
+  lazy val nexusSnapshotRepo = SettingKey[Option[MavenRepository]]("nexus-snapshot", "Nexus Repository for Snapshots.")
+  lazy val nexusReleaseRepo  = SettingKey[Option[MavenRepository]]("nexus-release", "Nexus Repository for Releases.")
 
-    def nexusRepo(status: String) =
-      "Nexus Repository for " + status.capitalize at "http://nexus.scala-tools.org/content/repositories/" + status
+  object ScalaToolsNexus {
+    lazy val Realm        = "Sonatype Nexus Repository Manager"
+    lazy val Host         = "nexus.scala-tools.org"
+    lazy val SnapshotRepo = repo(Host, "snapshots")
+    lazy val ReleaseRepo  = repo(Host, "releases")
+
+    def repo(host: String, status: String) =
+      "Nexus Repository for " + status.capitalize at "http://%s/content/repositories/%s".format(host, status)
   }
 
   object CredentialSources {
-    lazy val Default = Path.userHome / ".ivy2" / ".credentials"
+    lazy val Default = Path.userHome / ".sbt" / ".credentials"
     lazy val Maven   = Path.userHome / ".m2" / "settings.xml"
   }
 
@@ -53,24 +59,20 @@ object ScalaToolsPlugin extends Plugin {
     * @see http://maven.apache.org/settings.html
     */
   object MavenCredentials {
-    val nexusRealm = "Sonatype Nexus Repository Manager"
-    val nexusHost  = "nexus.scala-tools.org"
 
-    def add(path: File, log: Logger): Unit =
-      loadCredentials(path) match {
+    def add(realm: String, host: String, settingsPath: File, log: Logger): Unit =
+      loadCredentials(realm, host, settingsPath) match {
         case Right(dc) => dc map Credentials.toDirect foreach { c => Credentials.add(c.realm, c.host, c.userName, c.passwd) }
         case Left(err) => log.warn(err)
       }
 
-    def loadCredentials(file: File): Either[String, Seq[Credentials]] =
+    def loadCredentials(realm: String, host: String, file: File): Either[String, Seq[Credentials]] =
       if (file.exists)
         util.control.Exception.catching(classOf[org.xml.sax.SAXException], classOf[IOException]) either {
-          xml.XML.loadFile(file) \ "servers" \ "server" map { s =>
-            // settings.xml doesn't keep auth realm but SBT expects one;
-            // Set a realm for known host and fallback to something generic for others
-            val (h, u, p) = (s \ "id" text, s \ "username" text, s \ "password" text)
-            Credentials((if (h == nexusHost) nexusRealm else "Unknown"), h, u, p)
-          }
+          for {
+            s <- xml.XML.loadFile(file) \ "servers" \ "server"
+            cred = Credentials(realm, host, (s \ "username").text, (s \ "password").text) if ((s \ "id").text == host)
+          } yield cred
         } match {
           case Right(creds) => Right(creds)
           case Left(e)      => Left("Could not read the settings file %s [%s]".format(file, e.getMessage))
@@ -78,26 +80,27 @@ object ScalaToolsPlugin extends Plugin {
       else Left("Maven settings file " + file + " does not exist")
   }
 
-  def switchPublishRepo(version: String) = {
-    import DistributionRepositories._
-    if (version endsWith "-SNAPSHOT") Some(Snapshot) else Some(Release)
-  }
-
-  def loadIvySbt(conf: IvyConfiguration, creds: Seq[Credentials], mvn: File, s: TaskStreams) = {
-    if (mvn.exists) MavenCredentials.add(mvn, s.log)
+  /**
+    * This is a modified version of `sbt.Defaults.loadIvySbt` that prepends credentials from `mavenSettings`.
+    */
+  def loadIvySbt(conf: IvyConfiguration, creds: Seq[Credentials], mvnSettings: File, realm: String, host: Option[String], s: TaskStreams) = {
+    if (mvnSettings.exists && host.isDefined) MavenCredentials.add(realm, host.get, mvnSettings, s.log)
     Credentials.register(creds, s.log)
     new IvySbt(conf)
   }
 
   def scalaToolsSettings: Seq[Setting[_]] =
     inConfig(ScalaTools)(Seq(
-      publishTo    <<= version(switchPublishRepo),
-      mavenSettings := CredentialSources.Maven,
-      credentials   := Seq(Credentials(CredentialSources.Default)),
-      ivySbt       <<= (ivyConfiguration, credentials, mavenSettings, streams) map loadIvySbt)) ++
+      nexusRealm        := ScalaToolsNexus.Realm,
+      nexusHost         := Some(ScalaToolsNexus.Host),
+      nexusSnapshotRepo := Some(ScalaToolsNexus.SnapshotRepo),
+      nexusReleaseRepo  := Some(ScalaToolsNexus.ReleaseRepo),
+      publishTo        <<= (isSnapshot, nexusSnapshotRepo, nexusReleaseRepo) { if (_) _ else _ },
+      mavenSettings     := CredentialSources.Maven,
+      credentials       := Seq(Credentials(CredentialSources.Default)),
+      ivySbt           <<= (ivyConfiguration, credentials, mavenSettings, nexusRealm, nexusHost, streams) map loadIvySbt)) ++
     Seq(
-      publishTo     <<= publishTo or (publishTo in ScalaTools),
-      mavenSettings <<= mavenSettings or (mavenSettings in ScalaTools),
+      publishTo     <<= publishTo in ScalaTools,
       credentials  <++= credentials in ScalaTools,
       ivySbt        <<= ivySbt in ScalaTools)
 

@@ -4,7 +4,7 @@ organization := "org.scala-tools.sbt"
 
 name := "sbt-scalatools-plugin"
 
-version := "0.0.1"
+version := "0.0.1-SNAPSHOT"
 
 licenses += ("Apache License, Version 2.0", url("http://www.apache.org/licenses/LICENSE-2.0.txt"))
 
