@@ -31,7 +31,8 @@ object ScalaToolsPlugin extends Plugin {
 
   lazy val ScalaTools = config("scala-tools") hide
 
-  lazy val mavenSettings = SettingKey[File]("maven-settings", "Maven settings.xml file.")
+  lazy val mavenSettings   = SettingKey[File]("maven-settings", "Maven's settings.xml file.")
+  lazy val mavenCredential = TaskKey[Unit]("maven-credential", "Add credentials from Maven's settings.xml file.")
 
   lazy val nexusRealm        = SettingKey[String]("nexus-realm", "Nexus Repository realm.")
   lazy val nexusHost         = SettingKey[Option[String]]("nexus-host", "Nexus Repository hostname.")
@@ -79,14 +80,13 @@ object ScalaToolsPlugin extends Plugin {
       else Left("Maven settings file " + file + " does not exist")
   }
 
-  /**
-    * This is a modified version of `sbt.Defaults.ivySbt0` that prepends credentials from `mavenSettings`.
-    */
-  def loadIvySbt(conf: IvyConfiguration, creds: Seq[Credentials], mvnSettings: File, realm: String, host: Option[String], s: TaskStreams) = {
-    if (mvnSettings.exists && host.isDefined) MavenCredentials.add(realm, host.get, mvnSettings, s.log)
-    Credentials.register(creds, s.log)
-    new IvySbt(conf)
-  }
+  def mavenCredential0: Project.Initialize[Task[Unit]] =
+    (mavenSettings, nexusRealm, nexusHost, streams) map { (file, realm, host, s) =>
+      if (file.exists && host.isDefined)
+        MavenCredentials.add(realm, host.get, file, s.log)
+      else
+        s.log.debug("Loading credentials from Maven settings file " + file + " skipped because of non-existent file or undefined `nexus-host` key")
+    }
 
   def scalaToolsSettings: Seq[Setting[_]] =
     inConfig(ScalaTools)(Seq(
@@ -96,11 +96,12 @@ object ScalaToolsPlugin extends Plugin {
       nexusReleaseRepo  := Some(ScalaToolsNexus.ReleaseRepo),
       publishTo        <<= (isSnapshot, nexusSnapshotRepo, nexusReleaseRepo) { if (_) _ else _ },
       mavenSettings     := CredentialSources.Maven,
-      credentials       := Seq(Credentials(CredentialSources.Default)),
-      ivySbt           <<= (ivyConfiguration, credentials, mavenSettings, nexusRealm, nexusHost, streams) map loadIvySbt)) ++
+      mavenCredential  <<= mavenCredential0,
+      credentials       := Seq(Credentials(CredentialSources.Default))
+    )) ++
     Seq(
       publishTo     <<= publishTo in ScalaTools,
       credentials  <++= credentials in ScalaTools,
-      ivySbt        <<= ivySbt in ScalaTools)
+      ivySbt        <<= (mavenCredential in ScalaTools, ivySbt) map { (mvn, ivy) => mvn; ivy })
 
 }
