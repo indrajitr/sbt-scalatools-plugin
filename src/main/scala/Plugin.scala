@@ -61,18 +61,17 @@ object ScalaToolsPlugin extends Plugin {
   object MavenCredentials {
 
     def add(realm: String, host: String, settingsPath: File, log: Logger): Unit =
-      loadCredentials(realm, host, settingsPath) match {
-        case Right(dc) => dc map Credentials.toDirect foreach { c => Credentials.add(c.realm, c.host, c.userName, c.passwd) }
-        case Left(err) => log.warn(err)
+      loadCredentials(host, settingsPath) match {
+        case Right(creds) => creds foreach { c => Credentials.add(realm, host, c._1, c._2) }
+        case Left(err)    => log.warn(err)
       }
 
-    def loadCredentials(realm: String, host: String, file: File): Either[String, Seq[Credentials]] =
+    private def loadCredentials(host: String, file: File): Either[String, Seq[(String, String)]] =
       if (file.exists)
         util.control.Exception.catching(classOf[org.xml.sax.SAXException], classOf[IOException]) either {
-          for {
-            s <- xml.XML.loadFile(file) \ "servers" \ "server"
-            cred = Credentials(realm, host, (s \ "username").text, (s \ "password").text) if ((s \ "id").text == host)
-          } yield cred
+          (xml.XML.loadFile(file) \ "servers" \ "server") withFilter { s => (s \ "id").text == host } map { s =>
+            (s \ "username" text, s \ "password" text)
+          }
         } match {
           case Right(creds) => Right(creds)
           case Left(e)      => Left("Could not read the settings file %s [%s]".format(file, e.getMessage))
@@ -81,7 +80,7 @@ object ScalaToolsPlugin extends Plugin {
   }
 
   /**
-    * This is a modified version of `sbt.Defaults.loadIvySbt` that prepends credentials from `mavenSettings`.
+    * This is a modified version of `sbt.Defaults.ivySbt0` that prepends credentials from `mavenSettings`.
     */
   def loadIvySbt(conf: IvyConfiguration, creds: Seq[Credentials], mvnSettings: File, realm: String, host: Option[String], s: TaskStreams) = {
     if (mvnSettings.exists && host.isDefined) MavenCredentials.add(realm, host.get, mvnSettings, s.log)
