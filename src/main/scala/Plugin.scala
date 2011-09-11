@@ -61,31 +61,29 @@ object ScalaToolsPlugin extends Plugin {
     */
   object MavenCredentials {
 
-    def add(realm: String, host: String, settingsPath: File, log: Logger): Unit =
+    def add(realm: String, host: String, settingsPath: File, log: Logger) {
       loadCredentials(host, settingsPath) match {
         case Right(creds) => creds foreach { c => Credentials.add(realm, host, c._1, c._2) }
         case Left(err)    => log.warn(err)
       }
+    }
 
     private def loadCredentials(host: String, file: File): Either[String, Seq[(String, String)]] =
       if (file.exists)
         util.control.Exception.catching(classOf[org.xml.sax.SAXException], classOf[IOException]) either {
-          (xml.XML.loadFile(file) \ "servers" \ "server") withFilter { s => (s \ "id").text == host } map { s =>
+          (xml.XML.loadFile(file) \ "servers" \ "server") withFilter(s => (s \ "id").text == host) map { s =>
             (s \ "username" text, s \ "password" text)
           }
         } match {
           case Right(creds) => Right(creds)
-          case Left(e)      => Left("Could not read the settings file %s [%s]".format(file, e.getMessage))
+          case Left(e)      => Left("Could not read the settings file %s [%s]".format(file, e))
         }
       else Left("Maven settings file " + file + " does not exist")
   }
 
   def mavenCredential0: Project.Initialize[Task[Unit]] =
-    (mavenSettings, nexusRealm, nexusHost, streams) map { (file, realm, host, s) =>
-      if (file.exists && host.isDefined)
-        MavenCredentials.add(realm, host.get, file, s.log)
-      else
-        s.log.debug("Loading credentials from Maven settings file " + file + " skipped because of non-existent file or undefined `nexus-host` key")
+    (nexusRealm, nexusHost, mavenSettings, streams) map { (realm, host, file, s) =>
+        MavenCredentials.add(realm, host.getOrElse("default"), file, s.log)
     }
 
   def scalaToolsSettings: Seq[Setting[_]] =
@@ -96,12 +94,10 @@ object ScalaToolsPlugin extends Plugin {
       nexusReleaseRepo  := Some(ScalaToolsNexus.ReleaseRepo),
       publishTo        <<= (isSnapshot, nexusSnapshotRepo, nexusReleaseRepo) { if (_) _ else _ },
       mavenSettings     := CredentialSources.Maven,
-      mavenCredential  <<= mavenCredential0,
-      credentials       := Seq(Credentials(CredentialSources.Default))
-    )) ++
+      mavenCredential  <<= mavenCredential0)) ++
     Seq(
       publishTo     <<= publishTo in ScalaTools,
-      credentials  <++= credentials in ScalaTools,
-      ivySbt        <<= (mavenCredential in ScalaTools, ivySbt) map { (mvn, ivy) => mvn; ivy })
+      credentials    += Credentials(CredentialSources.Default),
+      ivySbt        <<= ivySbt dependsOn(mavenCredential in ScalaTools))
 
 }
